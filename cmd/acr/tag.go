@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Azure/acr-cli/acr"
 	"github.com/Azure/acr-cli/cmd/api"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -107,6 +108,44 @@ func listTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL
 		}
 	}
 	return nil
+}
+
+// listTagss will do the http requests and print the digest of all the tags in the selected repository.
+func returnTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, repoName string) ([]acr.TagAttributesBase, error) {
+	//var resultList *[]acr.TagAttributesBase
+	lastTag := ""
+	resultTags, err := acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list tags")
+	}
+
+	var resultList []acr.TagAttributesBase
+	resultList = append(resultList, *resultTags.TagsAttributes...)
+
+	//fmt.Printf("Listing tags for the %q repository:\n", repoName)
+	// A for loop is used because the GetAcrTags method returns by default only 100 tags and their attributes.
+
+	for resultTags != nil && resultTags.TagsAttributes != nil {
+		tags := *resultTags.TagsAttributes
+		// for _, tag := range tags {
+		// 	tagName := *tag.Name
+		// 	fmt.Printf("%s/%s:%s\n", loginURL, repoName, tagName)
+		// }
+
+		// Since the GetAcrTags supports pagination when supplied with the last digest that was returned the last tag name
+		// digest is saved, the tag array contains at least one element because if it was empty the API would return
+		// a nil pointer instead of a pointer to a length 0 array.
+		lastTag = *tags[len(tags)-1].Name
+		resultTags, err = acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+		if err != nil {
+			return nil, err
+		}
+		if resultTags != nil && resultTags.TagsAttributes != nil {
+			resultList = append(resultList, *resultTags.TagsAttributes...)
+		}
+	}
+
+	return resultList, nil
 }
 
 // newTagDeleteCmd defines the tag delete subcommand, it receives as an argument an array of tag digests.
