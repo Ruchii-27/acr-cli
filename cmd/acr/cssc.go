@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Azure/acr-cli/auth/oras"
 	"github.com/Azure/acr-cli/cmd/api"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -95,6 +96,7 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 			registryName, err := csscParams.GetRegistryName()
 			loginURL := api.LoginURL(registryName)
 			var filter []FilterContent
+			GetRegistryCredsFromStore(csscParams, loginURL)
 			acrClient, err := api.GetAcrCLIClientWithAuth(loginURL, csscParams.username, csscParams.password, csscParams.configs)
 			if err != nil {
 				return err
@@ -103,10 +105,8 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 			// 0. Connect to the remote repository
 			repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, defaultFilterRepoName))
 			if err != nil {
-				fmt.Println("106")
 				panic(err)
 			}
-
 			repo.Client = &auth.Client{
 				Client: retry.DefaultClient,
 				Cache:  auth.DefaultCache,
@@ -211,6 +211,26 @@ func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientIn
 		}
 	}
 	return resultRepos, err
+}
+
+func GetRegistryCredsFromStore(csscParams *csscParameters, loginURL string) {
+	if csscParams.username == "" || csscParams.password == "" {
+		store, err := oras.NewStore(csscParams.configs...)
+		if err != nil {
+			errors.Wrap(err, "error resolving authentication")
+		}
+		cred, err := store.Credential(context.Background(), loginURL)
+		if err != nil {
+			errors.Wrap(err, "error resolving authentication")
+		}
+		csscParams.username = cred.Username
+		csscParams.password = cred.Password
+
+		// fallback to refresh token if it is available
+		if csscParams.password == "" && cred.RefreshToken != "" {
+			csscParams.password = cred.RefreshToken
+		}
+	}
 }
 
 func appendIfNotPresent(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
