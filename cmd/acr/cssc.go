@@ -28,7 +28,6 @@ const (
 // Besides the registry name and authentication information only the repository is needed.
 type copaParameters struct {
 	*rootParameters
-	repoName string
 }
 
 type FilterContent struct {
@@ -60,7 +59,7 @@ func newCopaPatchCmd(rootParams *rootParameters) *cobra.Command {
 			}
 
 			// 0. Connect to the remote repository
-			repo, err := remote.NewRepository(registryName + "/" + copaParams.repoName)
+			repo, err := remote.NewRepository(registryName + "/" + defaultFilterRepoName)
 			if err != nil {
 				panic(err)
 			}
@@ -126,9 +125,6 @@ func newCopaPatchCmd(rootParams *rootParameters) *cobra.Command {
 			return nil
 		},
 	}
-
-	cmd.PersistentFlags().StringVar(&copaParams.repoName, "repository", "", "The repository name where the filter file exists.")
-	cmd.MarkPersistentFlagRequired("repository")
 
 	return cmd
 }
