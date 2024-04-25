@@ -20,13 +20,15 @@ import (
 )
 
 const (
-	copPatchCmdLongMessage    = `acr copa: patches all images in registry.`
-	defaultFilterRepoName     = "continuouspatchingfilters"
-	defaultFilterJsonFileName = `filters.json`
+	newCsscCmdLongMessage       = `acr cssc: Manage cssc configurations for the registry.`
+	newCsscFilterCmdLongMessage = `acr cssc filter: Manage cssc patch filters for the registry.`
+	newFilterListCmdLongMessage = `acr cssc filter list: List cssc filters for the registry.`
+	defaultFilterRepoName       = "continuouspatchingfilters"
+	defaultFilterJsonFileName   = `filters.json`
 )
 
 // Besides the registry name and authentication information only the repository is needed.
-type copaParameters struct {
+type csscParameters struct {
 	*rootParameters
 }
 
@@ -40,63 +42,100 @@ type FilteredRepository struct {
 	Tag        string
 }
 
-// The tag command can be used to either list tags or delete tags inside a repository.
-// that can be done with the tag list and tag delete commands respectively.
-func newCopaPatchCmd(rootParams *rootParameters) *cobra.Command {
-	copaParams := copaParameters{rootParameters: rootParams}
+func newCsscCmd(rootParams *rootParameters) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cssc",
-		Short: "Patches repo inside a registry",
-		Long:  copPatchCmdLongMessage,
+		Short: "Manage cssc configurations for a registry",
+		Long:  newCsscCmdLongMessage,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.Help()
+			return nil
+		},
+	}
+
+	newCsscFilterCmd := newCsscPatchFilterCmd(rootParams)
+
+	cmd.AddCommand(
+		newCsscFilterCmd,
+	)
+
+	return cmd
+}
+
+func newCsscPatchFilterCmd(rootParams *rootParameters) *cobra.Command {
+	csscParams := csscParameters{rootParameters: rootParams}
+	cmd := &cobra.Command{
+		Use:   "filter",
+		Short: "Manage cssc continuous patch filters for a registry",
+		Long:  newCsscFilterCmdLongMessage,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.Help()
+			return nil
+		},
+	}
+
+	filterListCmd := newPatchFilterListCmd(&csscParams)
+
+	cmd.AddCommand(
+		filterListCmd,
+	)
+
+	return cmd
+}
+
+// The tag command can be used to either list tags or delete tags inside a repository.
+// that can be done with the tag list and tag delete commands respectively.
+func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List cssc continuous patch filters for a registry",
+		Long:  newFilterListCmdLongMessage,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			registryName, err := copaParams.GetRegistryName()
+			registryName, err := csscParams.GetRegistryName()
 			loginURL := api.LoginURL(registryName)
 			var filter []FilterContent
-			acrClient, err := api.GetAcrCLIClientWithAuth(loginURL, copaParams.username, copaParams.password, copaParams.configs)
+			acrClient, err := api.GetAcrCLIClientWithAuth(loginURL, csscParams.username, csscParams.password, csscParams.configs)
 			if err != nil {
 				return err
 			}
 
 			// 0. Connect to the remote repository
-			repo, err := remote.NewRepository(registryName + "/" + defaultFilterRepoName)
+			repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, defaultFilterRepoName))
 			if err != nil {
+				fmt.Println("106")
 				panic(err)
 			}
 
 			repo.Client = &auth.Client{
 				Client: retry.DefaultClient,
 				Cache:  auth.DefaultCache,
-				Credential: auth.StaticCredential(registryName, auth.Credential{
-					Username: copaParams.username,
-					Password: copaParams.password,
+				Credential: auth.StaticCredential(loginURL, auth.Credential{
+					Username: csscParams.username,
+					Password: csscParams.password,
 				}),
 			}
 
-			// 1. Fetch the artifact manifest by tag.
+			// 1. Get manifest by tag
 			tag := "latest"
-			desc, err := repo.Manifests().Resolve(ctx, tag)
+			descriptor, err := repo.Resolve(ctx, tag)
 			if err != nil {
 				panic(err)
 			}
-			//fmt.Println("digest", desc.Digest.String())
-
-			// 2. Use the digest to fetch the artifact manifest.
-			descriptor, rc, err := repo.FetchReference(ctx, desc.Digest.String())
+			rc, err := repo.Fetch(ctx, descriptor)
 			if err != nil {
 				panic(err)
 			}
-			defer rc.Close()
-
-			pulledContent, err := content.ReadAll(rc, descriptor)
+			defer rc.Close() // don't forget to close
+			pulledManifestContent, err := content.ReadAll(rc, descriptor)
 			if err != nil {
 				panic(err)
 			}
-			//fmt.Println("Pulled content from the registry: ", string(pulledContent))
+			//fmt.Println(string(pulledManifestContent))
 
-			// 3. Parse the pulled artifact manifest and fetch its layers.
+			// 2. Parse the pulled manifest and fetch its layers.
 			var pulledManifest v1.Manifest
-			if err := json.Unmarshal(pulledContent, &pulledManifest); err != nil {
+			if err := json.Unmarshal(pulledManifestContent, &pulledManifest); err != nil {
 				panic(err)
 			}
 
@@ -109,15 +148,15 @@ func newCopaPatchCmd(rootParams *rootParameters) *cobra.Command {
 				//fmt.Println(string(fileContent))
 			}
 
-			//4. Unmarshal the JSON file data into the filter slice
+			//3. Unmarshal the JSON file data into the filter slice
 			if err := json.Unmarshal(fileContent, &filter); err != nil {
 				fmt.Printf("Error unmarshalling JSON data: %v", err)
 			}
 
-			//5. Get a list of filtered repository and tag which matches the filter
+			//4. Get a list of filtered repository and tag which matches the filter
 			filteredResult, err := listAndFilterRepositories(ctx, acrClient, loginURL, filter)
 
-			//6. Print the list of filtered repository and tag
+			//5. Print the list of filtered repository and tag
 			for _, result := range filteredResult {
 				fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
 			}
