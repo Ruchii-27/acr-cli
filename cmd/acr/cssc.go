@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Azure/acr-cli/auth/oras"
 	"github.com/Azure/acr-cli/cmd/api"
@@ -21,16 +22,14 @@ import (
 )
 
 const (
-	newCsscCmdLongMessage       = `acr cssc: Manage cssc configurations for the registry.`
-	newCsscFilterCmdLongMessage = `acr cssc filter: Manage cssc patch filters for the registry.`
-	newFilterListCmdLongMessage = `acr cssc filter list: List cssc filters for the registry.`
-	defaultFilterRepoName       = "continuouspatchingfilters"
-	defaultFilterJsonFileName   = `filters.json`
+	newCsscCmdLongMessage        = `acr cssc: Lists cssc configurations for the registry. Use the subcommands to list continuous patch filters for the registry.`
+	newPatchFilterCmdLongMessage = `acr cssc patch: List cssc continuous patch filters for a registry. Use the --filter-policy flag to specify the repo where filters exists. Example: acr cssc patch --filter-policy continuouspatchpolicy:v1.`
 )
 
 // Besides the registry name and authentication information only the repository is needed.
 type csscParameters struct {
 	*rootParameters
+	filterPolicy string
 }
 
 type FilterContent struct {
@@ -43,10 +42,12 @@ type FilteredRepository struct {
 	Tag        string
 }
 
+// The cssc command can be used to list cssc configurations for a registry.
 func newCsscCmd(rootParams *rootParameters) *cobra.Command {
+	csscParams := csscParameters{rootParameters: rootParams}
 	cmd := &cobra.Command{
 		Use:   "cssc",
-		Short: "Manage cssc configurations for a registry",
+		Short: "Lists cssc configurations for a registry",
 		Long:  newCsscCmdLongMessage,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.Help()
@@ -54,46 +55,27 @@ func newCsscCmd(rootParams *rootParameters) *cobra.Command {
 		},
 	}
 
-	newCsscFilterCmd := newCsscPatchFilterCmd(rootParams)
+	newCsscPatchFilterCmd := newPatchFilterCmd(&csscParams)
 
 	cmd.AddCommand(
-		newCsscFilterCmd,
+		newCsscPatchFilterCmd,
 	)
 
 	return cmd
 }
 
-func newCsscPatchFilterCmd(rootParams *rootParameters) *cobra.Command {
-	csscParams := csscParameters{rootParameters: rootParams}
+// The patch subcommand can be used to list cssc continuous patch filters for a registry.
+func newPatchFilterCmd(csscParams *csscParameters) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "filter",
-		Short: "Manage cssc continuous patch filters for a registry",
-		Long:  newCsscFilterCmdLongMessage,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.Help()
-			return nil
-		},
-	}
-
-	filterListCmd := newPatchFilterListCmd(&csscParams)
-
-	cmd.AddCommand(
-		filterListCmd,
-	)
-
-	return cmd
-}
-
-// The tag command can be used to either list tags or delete tags inside a repository.
-// that can be done with the tag list and tag delete commands respectively.
-func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "patch",
 		Short: "List cssc continuous patch filters for a registry",
-		Long:  newFilterListCmdLongMessage,
+		Long:  newPatchFilterCmdLongMessage,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			registryName, err := csscParams.GetRegistryName()
+			if err != nil {
+				return err
+			}
 			loginURL := api.LoginURL(registryName)
 			var filter []FilterContent
 			GetRegistryCredsFromStore(csscParams, loginURL)
@@ -102,8 +84,13 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 				return err
 			}
 
-			// 0. Connect to the remote repository
-			repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, defaultFilterRepoName))
+			// 0. Get the repository and tag from the filter policy
+			repoTag := strings.Split(csscParams.filterPolicy, ":")
+			filterRepoName := repoTag[0]
+			filterRepoTagName := repoTag[1]
+
+			// 1. Connect to the remote repository
+			repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, filterRepoName))
 			if err != nil {
 				panic(err)
 			}
@@ -116,9 +103,8 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 				}),
 			}
 
-			// 1. Get manifest by tag
-			tag := "latest"
-			descriptor, err := repo.Resolve(ctx, tag)
+			// 2. Get manifest by tag
+			descriptor, err := repo.Resolve(ctx, filterRepoTagName)
 			if err != nil {
 				panic(err)
 			}
@@ -133,7 +119,7 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 			}
 			//fmt.Println(string(pulledManifestContent))
 
-			// 2. Parse the pulled manifest and fetch its layers.
+			// 3. Parse the pulled manifest and fetch its layers.
 			var pulledManifest v1.Manifest
 			if err := json.Unmarshal(pulledManifestContent, &pulledManifest); err != nil {
 				panic(err)
@@ -148,15 +134,15 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 				//fmt.Println(string(fileContent))
 			}
 
-			//3. Unmarshal the JSON file data into the filter slice
+			//4. Unmarshal the JSON file data into the filter slice
 			if err := json.Unmarshal(fileContent, &filter); err != nil {
 				fmt.Printf("Error unmarshalling JSON data: %v", err)
 			}
 
-			//4. Get a list of filtered repository and tag which matches the filter
+			//5. Get a list of filtered repository and tag which matches the filter
 			filteredResult, err := listAndFilterRepositories(ctx, acrClient, loginURL, filter)
 
-			//5. Print the list of filtered repository and tag
+			//6. Print the list of filtered repository and tag
 			for _, result := range filteredResult {
 				fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
 			}
@@ -165,10 +151,12 @@ func newPatchFilterListCmd(csscParams *csscParameters) *cobra.Command {
 		},
 	}
 
+	cmd.PersistentFlags().StringVar(&csscParams.filterPolicy, "filter-policy", "continuouspatchpolicy:v1", "The filter policy defined by the filter.json uploaded in a repo:tag. For v1, it will be continuouspatchpolicy:v1")
+	cmd.MarkPersistentFlagRequired("filter-policy")
 	return cmd
 }
 
-// listAndFilterRepositories returns a list of repositories and tags that match the filter
+// Matches and returns the repository and tag from the filter policy
 func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, filterRepositories []FilterContent) ([]FilteredRepository, error) {
 
 	// Get all repositories
@@ -180,10 +168,9 @@ func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientIn
 	// Initialize the result slice
 	var resultRepos []FilteredRepository = nil
 
-	// Loop through all the repositories
+	// Loop through all the repositories and tags and filter the repositories and tags based on the filter
 	if allRepos != nil {
 		allRepositories := *allRepos.Names
-
 		for _, filterRepository := range filterRepositories {
 			for _, repository := range allRepositories {
 				if repository == filterRepository.Repository {
