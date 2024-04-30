@@ -180,11 +180,14 @@ func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientIn
 						return nil, err
 					}
 					if filterRepository.Tags != nil {
-						for _, filterRepositoryTag := range filterRepository.Tags {
-							for _, repositoryTag := range repositoryTags {
-								if filterRepositoryTag == *repositoryTag.Name {
-									var repo = FilteredRepository{Repository: filterRepository.Repository, Tag: filterRepositoryTag}
-									resultRepos = appendIfNotPresent(resultRepos, repo)
+						for _, repositoryTag := range repositoryTags {
+							for _, filterRepositoryTag := range filterRepository.Tags {
+								if *repositoryTag.Name == filterRepositoryTag || *repositoryTag.Name == filterRepositoryTag+"-patched" {
+									var repo = FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name}
+									//resultRepos = appendIfNotPresent(resultRepos, repo)
+									fmt.Println("Processing Repo name:", repo.Repository, "Tag name:", repo.Tag)
+									resultRepos = appendNewOne(resultRepos, repo)
+									fmt.Println("-----------------------------------------------------------------------------")
 								}
 							}
 						}
@@ -228,4 +231,43 @@ func appendIfNotPresent(slice []FilteredRepository, element FilteredRepository) 
 	}
 	// Element is not present, append it to the slice
 	return append(slice, element)
+}
+
+func appendNewOne(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
+	// for _, existing := range slice {
+	// 	if existing.Repository == element.Repository && existing.Tag == element.Tag ||
+	// 		existing.Repository == element.Repository && strings.Contains(existing.Tag, "-patched") && existing.Tag == strings.Split(element.Tag, "-patched")[0] {
+	// 		return slice // Element already exists, return the original slice
+	// 	}
+	// }
+
+	for _, current := range slice {
+		if current.Repository == element.Repository {
+			fmt.Println("Repo name matches:", element.Repository)
+			if current.Tag == element.Tag {
+				fmt.Println("Tag already exists", element.Tag)
+				return slice // Element already exists, return the original slice
+			}
+
+			if element.Tag == current.Tag+"-patched" {
+				fmt.Println("Patch tag:", element.Tag)
+				fmt.Println("Original tag:", current.Tag)
+				// remove from slice the existing element whose tag matches with strings.Split(element.Tag, "-patched")[0]
+				for i, v := range slice {
+					if v.Repository == current.Repository && v.Tag == current.Tag {
+						fmt.Printf("Removing element from slice: %s:%s\n", v.Repository, v.Tag)
+						slice = append(slice[:i], slice[i+1:]...)
+						break
+					}
+				}
+				// add the new element to the slice
+				fmt.Println("Adding new element to slice:", element.Repository, element.Tag)
+				slice = append(slice, element)
+				return slice
+			}
+		}
+	}
+	fmt.Println("Repo name NOT matches:", element.Repository)
+	slice = append(slice, element)
+	return slice
 }
