@@ -14,7 +14,6 @@ import (
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
@@ -30,6 +29,7 @@ const (
 type csscParameters struct {
 	*rootParameters
 	filterPolicy string
+	image        string
 }
 
 type FilterContent struct {
@@ -64,11 +64,11 @@ func newCsscCmd(rootParams *rootParameters) *cobra.Command {
 	return cmd
 }
 
-// The patch subcommand can be used to list cssc continuous patch filters for a registry.
+// The patch subcommand can be used to list cssc continuous patch filters for a registry or to list matching tags and its corresponding patch tag if present.
 func newPatchFilterCmd(csscParams *csscParameters) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "patch",
-		Short: "List cssc continuous patch filters for a registry",
+		Short: "Manage cssc patch operations for a registry",
 		Long:  newPatchFilterCmdLongMessage,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -77,87 +77,155 @@ func newPatchFilterCmd(csscParams *csscParameters) *cobra.Command {
 				return err
 			}
 			loginURL := api.LoginURL(registryName)
-			var filter []FilterContent
-			GetRegistryCredsFromStore(csscParams, loginURL)
+			getRegistryCredsFromStore(csscParams, loginURL)
 			acrClient, err := api.GetAcrCLIClientWithAuth(loginURL, csscParams.username, csscParams.password, csscParams.configs)
 			if err != nil {
 				return err
 			}
 
-			// 0. Get the repository and tag from the filter policy
-			repoTag := strings.Split(csscParams.filterPolicy, ":")
-			filterRepoName := repoTag[0]
-			filterRepoTagName := repoTag[1]
-
-			// 1. Connect to the remote repository
-			repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, filterRepoName))
-			if err != nil {
-				panic(err)
-			}
-			repo.Client = &auth.Client{
-				Client: retry.DefaultClient,
-				Cache:  auth.DefaultCache,
-				Credential: auth.StaticCredential(loginURL, auth.Credential{
-					Username: csscParams.username,
-					Password: csscParams.password,
-				}),
+			// if patch is called with filter-policy flag, get the filter policy from the repository and list the repositories and tags that match the filter
+			if csscParams.filterPolicy != "" {
+				return listFilteredRepositoriesByFilterPolicy(ctx, csscParams, loginURL, acrClient)
 			}
 
-			// 2. Get manifest by tag
-			descriptor, err := repo.Resolve(ctx, filterRepoTagName)
-			if err != nil {
-				panic(err)
-			}
-			rc, err := repo.Fetch(ctx, descriptor)
-			if err != nil {
-				panic(err)
-			}
-			defer rc.Close() // don't forget to close
-			pulledManifestContent, err := content.ReadAll(rc, descriptor)
-			if err != nil {
-				panic(err)
-			}
-			//fmt.Println(string(pulledManifestContent))
-
-			// 3. Parse the pulled manifest and fetch its layers.
-			var pulledManifest v1.Manifest
-			if err := json.Unmarshal(pulledManifestContent, &pulledManifest); err != nil {
-				panic(err)
-			}
-
-			fileContent := []byte{}
-			for _, layer := range pulledManifest.Layers {
-				fileContent, err = content.FetchAll(ctx, repo, layer)
-				if err != nil {
-					panic(err)
-				}
-				//fmt.Println(string(fileContent))
-			}
-
-			//4. Unmarshal the JSON file data into the filter slice
-			if err := json.Unmarshal(fileContent, &filter); err != nil {
-				fmt.Printf("Error unmarshalling JSON data: %v", err)
-			}
-
-			//5. Get a list of filtered repository and tag which matches the filter
-			filteredResult, err := listAndFilterRepositories(ctx, acrClient, loginURL, filter)
-
-			//6. Print the list of filtered repository and tag
-			for _, result := range filteredResult {
-				fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
+			// if patch is called with image flag, get the tags for the repository and fetch the matching tag and its corresponding patch tag if present
+			if csscParams.image != "" {
+				return listMatchingAndPatchTags(ctx, csscParams, loginURL, acrClient)
 			}
 
 			return nil
 		},
 	}
 
-	cmd.PersistentFlags().StringVar(&csscParams.filterPolicy, "filter-policy", "continuouspatchpolicy:v1", "The filter policy defined by the filter.json uploaded in a repo:tag. For v1, it will be continuouspatchpolicy:v1")
-	cmd.MarkPersistentFlagRequired("filter-policy")
+	cmd.PersistentFlags().StringVar(&csscParams.filterPolicy, "filter-policy", "", "The filter policy defined by the filter.json uploaded in a repo:tag. For v1, it will be continuouspatchpolicy:v1")
+	cmd.PersistentFlags().StringVar(&csscParams.image, "image", "", "The image in the format loginUrl/repo:tag to fetch the matching tag and its corresponding patch tag if present. Example: acr cssc patch --image loginUrl/repo:tag")
+
 	return cmd
 }
 
-// Matches and returns the repository and tag from the filter policy
-func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, filterRepositories []FilterContent) ([]FilteredRepository, error) {
+// Lists all repositories and tags that match the filter defined by a json file uploaded in a repository for a registry
+func listFilteredRepositoriesByFilterPolicy(ctx context.Context, csscParams *csscParameters, loginURL string, acrClient *api.AcrCLIClient) error {
+
+	var filter []FilterContent = nil
+
+	// 0. Get the repository and tag from the filter policy
+	repoTag := strings.Split(csscParams.filterPolicy, ":")
+	filterRepoName := repoTag[0]
+	filterRepoTagName := repoTag[1]
+
+	// 1. Connect to the remote repository
+	repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", loginURL, filterRepoName))
+	if err != nil {
+		panic(err)
+	}
+	repo.Client = &auth.Client{
+		Client: retry.DefaultClient,
+		Cache:  auth.DefaultCache,
+		Credential: auth.StaticCredential(loginURL, auth.Credential{
+			Username: csscParams.username,
+			Password: csscParams.password,
+		}),
+	}
+
+	// 2. Get manifest by tag
+	descriptor, err := repo.Resolve(ctx, filterRepoTagName)
+	if err != nil {
+		panic(err)
+	}
+	rc, err := repo.Fetch(ctx, descriptor)
+	if err != nil {
+		panic(err)
+	}
+	defer rc.Close() // don't forget to close
+	pulledManifestContent, err := content.ReadAll(rc, descriptor)
+	if err != nil {
+		panic(err)
+	}
+	//fmt.Println(string(pulledManifestContent))
+
+	// 3. Parse the pulled manifest and fetch its layers.
+	var pulledManifest v1.Manifest
+	if err := json.Unmarshal(pulledManifestContent, &pulledManifest); err != nil {
+		panic(err)
+	}
+
+	fileContent := []byte{}
+	for _, layer := range pulledManifest.Layers {
+		fileContent, err = content.FetchAll(ctx, repo, layer)
+		if err != nil {
+			panic(err)
+		}
+		//fmt.Println(string(fileContent))
+	}
+
+	//4. Unmarshal the JSON file data into the filter slice
+	if err := json.Unmarshal(fileContent, &filter); err != nil {
+		fmt.Printf("Error unmarshalling JSON data: %v", err)
+	}
+
+	//5. Get a list of filtered repository and tag which matches the filter
+	filteredResult, err := getAndFilterRepositories(ctx, acrClient, loginURL, filter)
+	if err != nil {
+		return err
+	}
+
+	//6. Print the list of filtered repository and tag
+	for _, result := range filteredResult {
+		fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
+	}
+	return nil
+}
+
+// Lists the matching tag and its corresponding patch tag if present for a given image in the format loginUrl/repo:tag
+func listMatchingAndPatchTags(ctx context.Context, csscParams *csscParameters, loginURL string, acrClient *api.AcrCLIClient) error {
+
+	// if image is not in the format loginurl/repo:tag, return error
+	if !strings.Contains(csscParams.image, "/") || !strings.Contains(csscParams.image, ":") {
+		return errors.New("Invalid image filter format. Please provide the image in the format loginurl/repo:tag")
+	}
+
+	// if loginurl from image dose not match with LoginURL, return error
+	if !strings.Contains(csscParams.image, loginURL) {
+		return errors.New("Invalid image filter. Please provide the loginurl that matches the registry name")
+	}
+
+	// split csscParams.image by / and : to get the repository and tag
+	repository, tag := "", ""
+	if arr := strings.Split(csscParams.image, "/"); len(arr) > 1 {
+		if arr1 := strings.Split(arr[1], ":"); len(arr1) > 1 {
+			repository, tag = arr1[0], arr1[1]
+		}
+	}
+
+	repositoryTags, err := returnTags(ctx, acrClient, loginURL, repository)
+	if err != nil {
+		panic(err)
+	}
+
+	matchingTag := ""
+	patchTag := ""
+	for _, repositoryTag := range repositoryTags {
+		if *repositoryTag.Name == tag {
+			matchingTag = *repositoryTag.Name
+		}
+		if *repositoryTag.Name == tag+"-patched" {
+			patchTag = *repositoryTag.Name
+		}
+	}
+
+	if matchingTag == "" && patchTag == "" {
+		err = errors.New("No matching tag found")
+	} else if matchingTag != "" && patchTag != "" {
+		fmt.Printf("%s->%s,%s\n", repository, matchingTag, patchTag)
+	} else if patchTag == "" && matchingTag != "" {
+		fmt.Printf("%s->%s,%s\n", repository, matchingTag, matchingTag)
+	}
+
+	return nil
+}
+
+// Gets all repositories and tags and filters the repositories and tags based on the filter
+func getAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, filterRepositories []FilterContent) ([]FilteredRepository, error) {
 
 	// Get all repositories
 	allRepos, err := acrClient.GetAcrRepositories(ctx, "", nil)
@@ -182,12 +250,9 @@ func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientIn
 					if filterRepository.Tags != nil {
 						for _, repositoryTag := range repositoryTags {
 							for _, filterRepositoryTag := range filterRepository.Tags {
-								if *repositoryTag.Name == filterRepositoryTag || *repositoryTag.Name == filterRepositoryTag+"-patched" {
+								if *repositoryTag.Name == filterRepositoryTag {
 									var repo = FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name}
-									//resultRepos = appendIfNotPresent(resultRepos, repo)
-									fmt.Println("Processing Repo name:", repo.Repository, "Tag name:", repo.Tag)
-									resultRepos = appendNewOne(resultRepos, repo)
-									fmt.Println("-----------------------------------------------------------------------------")
+									resultRepos = appendIfNotPresent(resultRepos, repo)
 								}
 							}
 						}
@@ -203,7 +268,7 @@ func listAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientIn
 	return resultRepos, err
 }
 
-func GetRegistryCredsFromStore(csscParams *csscParameters, loginURL string) {
+func getRegistryCredsFromStore(csscParams *csscParameters, loginURL string) {
 	if csscParams.username == "" || csscParams.password == "" {
 		store, err := oras.NewStore(csscParams.configs...)
 		if err != nil {
@@ -231,43 +296,4 @@ func appendIfNotPresent(slice []FilteredRepository, element FilteredRepository) 
 	}
 	// Element is not present, append it to the slice
 	return append(slice, element)
-}
-
-func appendNewOne(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
-	// for _, existing := range slice {
-	// 	if existing.Repository == element.Repository && existing.Tag == element.Tag ||
-	// 		existing.Repository == element.Repository && strings.Contains(existing.Tag, "-patched") && existing.Tag == strings.Split(element.Tag, "-patched")[0] {
-	// 		return slice // Element already exists, return the original slice
-	// 	}
-	// }
-
-	for _, current := range slice {
-		if current.Repository == element.Repository {
-			fmt.Println("Repo name matches:", element.Repository)
-			if current.Tag == element.Tag {
-				fmt.Println("Tag already exists", element.Tag)
-				return slice // Element already exists, return the original slice
-			}
-
-			if element.Tag == current.Tag+"-patched" {
-				fmt.Println("Patch tag:", element.Tag)
-				fmt.Println("Original tag:", current.Tag)
-				// remove from slice the existing element whose tag matches with strings.Split(element.Tag, "-patched")[0]
-				for i, v := range slice {
-					if v.Repository == current.Repository && v.Tag == current.Tag {
-						fmt.Printf("Removing element from slice: %s:%s\n", v.Repository, v.Tag)
-						slice = append(slice[:i], slice[i+1:]...)
-						break
-					}
-				}
-				// add the new element to the slice
-				fmt.Println("Adding new element to slice:", element.Repository, element.Tag)
-				slice = append(slice, element)
-				return slice
-			}
-		}
-	}
-	fmt.Println("Repo name NOT matches:", element.Repository)
-	slice = append(slice, element)
-	return slice
 }
