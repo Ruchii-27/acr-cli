@@ -28,9 +28,9 @@ const (
 // Besides the registry name and authentication information only the repository is needed.
 type csscParameters struct {
 	*rootParameters
-	filterPolicy string
-	image        string
-	internal     bool
+	filterPolicy  string
+	image         string
+	showPatchTags bool
 }
 
 type FilterContent struct {
@@ -41,6 +41,7 @@ type FilterContent struct {
 type FilteredRepository struct {
 	Repository string
 	Tag        string
+	PatchTag   string
 }
 
 // The cssc command can be used to list cssc configurations for a registry.
@@ -99,7 +100,7 @@ func newPatchFilterCmd(csscParams *csscParameters) *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&csscParams.filterPolicy, "filter-policy", "", "The filter policy defined by the filter.json uploaded in a repo:tag. For v1, it will be continuouspatchpolicy:v1")
-	cmd.Flags().BoolVar(&csscParams.internal, "internal", false, "Use this flag in combination with --filter-policy flag to replace original tag with patched tag (if it exists) in the list of repositories and tags that match the filter. Example: acr cssc patch --filter-policy continuouspatchpolicy:v1 --internal")
+	cmd.Flags().BoolVar(&csscParams.showPatchTags, "show-patch-tags", false, "Use this flag in combination with --filter-policy to get patched image tag (if it exists) for repositories and tags that match the filter. Example: acr cssc patch --filter-policy continuouspatchpolicy:v1 --show-patch-tags")
 	cmd.PersistentFlags().StringVar(&csscParams.image, "image", "", "The image in the format loginUrl/repo:tag to fetch the matching tag and its corresponding patch tag if present. Example: acr cssc patch --image loginUrl/repo:tag")
 
 	return cmd
@@ -166,16 +167,27 @@ func listFilteredRepositoriesByFilterPolicy(ctx context.Context, csscParams *css
 	}
 
 	//5. Get a list of filtered repository and tag which matches the filter
-	isInternal := csscParams.internal
-	filteredResult, err := getAndFilterRepositories(ctx, acrClient, loginURL, isInternal, filter)
+	filteredResult, err := getAndFilterRepositories(ctx, acrClient, loginURL, filter)
 	if err != nil {
 		return err
 	}
 
 	//6. Print the list of filtered repository and tag
-	for _, result := range filteredResult {
-		fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
+	if len(filteredResult) == 0 {
+		fmt.Println("No matching repository and tag found")
+		return nil
 	}
+
+	if csscParams.showPatchTags {
+		for _, result := range filteredResult {
+			fmt.Printf("%s/%s:%s,%s\n", loginURL, result.Repository, result.Tag, result.PatchTag)
+		}
+	} else {
+		for _, result := range filteredResult {
+			fmt.Printf("%s/%s:%s\n", loginURL, result.Repository, result.Tag)
+		}
+	}
+
 	return nil
 }
 
@@ -219,16 +231,16 @@ func listMatchingAndPatchTags(ctx context.Context, csscParams *csscParameters, l
 	if matchingTag == "" && patchTag == "" {
 		err = errors.New("No matching tag found")
 	} else if matchingTag != "" && patchTag != "" {
-		fmt.Printf("%s->%s,%s\n", repository, matchingTag, patchTag)
+		fmt.Printf("%s/%s:%s,%s\n", loginURL, repository, matchingTag, patchTag)
 	} else if patchTag == "" && matchingTag != "" {
-		fmt.Printf("%s->%s,%s\n", repository, matchingTag, matchingTag)
+		fmt.Printf("%s/%s:%s,%s\n", loginURL, repository, matchingTag, matchingTag)
 	}
 
 	return nil
 }
 
 // Gets all repositories and tags and filters the repositories and tags based on the filter
-func getAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, isInternal bool, filterRepositories []FilterContent) ([]FilteredRepository, error) {
+func getAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, filterRepositories []FilterContent) ([]FilteredRepository, error) {
 
 	// Get all repositories
 	allRepos, err := acrClient.GetAcrRepositories(ctx, "", nil)
@@ -250,25 +262,17 @@ func getAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInt
 					if err != nil {
 						return nil, err
 					}
-					if isInternal {
-						if filterRepository.Tags != nil {
-							for _, filterRepositoryTag := range filterRepository.Tags {
-								for _, repositoryTag := range repositoryTags {
-									if *repositoryTag.Name == filterRepositoryTag || *repositoryTag.Name == filterRepositoryTag+"-patched" {
-										var repo = FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name}
-										resultRepos = replaceOriginalWithPatchedIfPresent(resultRepos, repo)
-									}
+
+					if filterRepository.Tags != nil {
+						for _, filterRepositoryTag := range filterRepository.Tags {
+							for _, repositoryTag := range repositoryTags {
+								if *repositoryTag.Name == filterRepositoryTag {
+									repo := FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name, PatchTag: *repositoryTag.Name}
+									resultRepos = appendElement(resultRepos, repo)
 								}
-							}
-						}
-					} else {
-						if filterRepository.Tags != nil {
-							for _, filterRepositoryTag := range filterRepository.Tags {
-								for _, repositoryTag := range repositoryTags {
-									if *repositoryTag.Name == filterRepositoryTag {
-										var repo = FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name}
-										resultRepos = appendIfNotPresent(resultRepos, repo)
-									}
+								if *repositoryTag.Name == filterRepositoryTag+"-patched" {
+									repo := FilteredRepository{Repository: filterRepository.Repository, Tag: filterRepositoryTag, PatchTag: filterRepositoryTag + "-patched"}
+									resultRepos = appendElement(resultRepos, repo)
 								}
 							}
 						}
@@ -304,37 +308,18 @@ func getRegistryCredsFromStore(csscParams *csscParameters, loginURL string) {
 	}
 }
 
-func appendIfNotPresent(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
+func appendElement(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
 	for _, existing := range slice {
-		if existing == element {
-			return slice // Element already exists, return the original slice
-		}
-	}
-	// Element is not present, append it to the slice
-	return append(slice, element)
-}
-
-func replaceOriginalWithPatchedIfPresent(slice []FilteredRepository, element FilteredRepository) []FilteredRepository {
-	for _, current := range slice {
-		if current.Repository == element.Repository {
-			if current.Tag == element.Tag {
-				return slice // Element already exists, return the original slice
-			}
-
-			if element.Tag == current.Tag+"-patched" {
-				// remove from slice the original tag if patched tag is found
-				for i, v := range slice {
-					if v.Repository == current.Repository && v.Tag == current.Tag {
-						slice = append(slice[:i], slice[i+1:]...)
-						break
-					}
+		if existing.Repository == element.Repository && existing.Tag == element.Tag {
+			// Remove the existing element from the slice
+			for i, v := range slice {
+				if v.Repository == element.Repository && v.Tag == element.Tag {
+					slice = append(slice[:i], slice[i+1:]...)
+					break
 				}
-				// add the new element to the slice
-				slice = append(slice, element)
-				return slice
 			}
 		}
 	}
-	slice = append(slice, element)
-	return slice
+	//Append element to the slice
+	return append(slice, element)
 }
