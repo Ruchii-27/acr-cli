@@ -263,9 +263,18 @@ func getAndFilterRepositories(ctx context.Context, acrClient api.AcrCLIClientInt
 						return nil, err
 					}
 
-					if filterRepository.Tags != nil {
-						for _, filterRepositoryTag := range filterRepository.Tags {
-							for _, repositoryTag := range repositoryTags {
+					for _, repositoryTag := range repositoryTags {
+						if filterRepository.Tags == nil || len(filterRepository.Tags) == 0 { // If no tags are specified in the filter for the repository, then add all tags
+							if strings.Contains(*repositoryTag.Name, "-patched") {
+								originalTag := strings.Split(*repositoryTag.Name, "-patched")[0]
+								repo := FilteredRepository{Repository: filterRepository.Repository, Tag: originalTag, PatchTag: *repositoryTag.Name}
+								resultRepos = appendElement(resultRepos, repo)
+							} else {
+								repo := FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name, PatchTag: *repositoryTag.Name}
+								resultRepos = appendElement(resultRepos, repo)
+							}
+						} else { // If tags are specified in the filter for the repository, then add only the tags that match the filter
+							for _, filterRepositoryTag := range filterRepository.Tags {
 								if *repositoryTag.Name == filterRepositoryTag {
 									repo := FilteredRepository{Repository: filterRepository.Repository, Tag: *repositoryTag.Name, PatchTag: *repositoryTag.Name}
 									resultRepos = appendElement(resultRepos, repo)
