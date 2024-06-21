@@ -131,8 +131,10 @@ func ApplyFilterAndGetFilteredList(ctx context.Context, acrClient api.AcrCLIClie
 
 		if len(filterRepo.Tags) == 1 && filterRepo.Tags[0] == "*" { // If the repo has * as tags defined in the filter, then all tags are considered for that repo
 			for _, tag := range tagList {
-				if strings.HasSuffix(*tag.Name, "-patched") {
-					originalTag := (*tag.Name)[:len(*tag.Name)-len("-patched")]
+				// if strings.HasSuffix(*tag.Name, "-patched") {
+				if strings.Index(*tag.Name, "-patched") != -1 {
+					index := strings.Index(*tag.Name, "-patched")
+					originalTag := (*tag.Name)[:index]
 					matchingRepo := FilteredRepository{Repository: filterRepo.Repository, Tag: originalTag, PatchTag: *tag.Name}
 					filteredRepos = AppendElement(filteredRepos, matchingRepo)
 				} else {
@@ -146,8 +148,10 @@ func ApplyFilterAndGetFilteredList(ctx context.Context, acrClient api.AcrCLIClie
 					if *tag.Name == ftag {
 						matchingRepo := FilteredRepository{Repository: filterRepo.Repository, Tag: *tag.Name, PatchTag: *tag.Name}
 						filteredRepos = AppendElement(filteredRepos, matchingRepo)
-					} else if *tag.Name == ftag+"-patched" {
-						matchingRepo := FilteredRepository{Repository: filterRepo.Repository, Tag: ftag, PatchTag: ftag + "-patched"}
+					} else if strings.HasPrefix(*tag.Name, ftag) && strings.Index(*tag.Name, "-patched") != -1 {
+						// else if *tag.Name == ftag+"-patched" {
+						// matchingRepo := FilteredRepository{Repository: filterRepo.Repository, Tag: ftag, PatchTag: ftag + "-patched"}
+						matchingRepo := FilteredRepository{Repository: filterRepo.Repository, Tag: ftag, PatchTag: *tag.Name}
 						filteredRepos = AppendElement(filteredRepos, matchingRepo)
 					}
 				}
