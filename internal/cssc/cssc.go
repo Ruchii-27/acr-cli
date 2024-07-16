@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Azure/acr-cli/internal/api"
@@ -185,13 +186,41 @@ func AppendElement(slice []FilteredRepository, element FilteredRepository) []Fil
 	alreadyInSlice := false
 	for i, existing := range slice {
 		if existing.Repository == element.Repository && existing.Tag == element.Tag {
-			slice[i].PatchTag = element.PatchTag
-			alreadyInSlice = true
-			break
+			//fmt.Printf("Current, New %s, %s\n", slice[i].PatchTag, element.PatchTag)
+			// // re := regexp.MustCompile(`-patched(\d+)`)
+			currVersion, currVersionFound := extractPatchedNumber(slice[i].PatchTag)
+			newVersion, newVersionFound := extractPatchedNumber(element.PatchTag)
+			//fmt.Printf("Current, New %s, %s\n", strconv.Itoa(currVersion), newVersion)
+			if currVersionFound && newVersionFound {
+				if newVersion > currVersion {
+					fmt.Println(newVersion, currVersion)
+					slice[i].PatchTag = element.PatchTag
+					alreadyInSlice = true
+					break
+				}
+			} else {
+				fmt.Println(element.PatchTag, slice[i].PatchTag)
+				slice[i].PatchTag = element.PatchTag
+				alreadyInSlice = true
+				break
+			}
+
 		}
 	}
 	if isFirstElement || !alreadyInSlice {
 		slice = append(slice, element)
 	}
 	return slice
+}
+
+func extractPatchedNumber(version string) (int, bool) {
+	re := regexp.MustCompile(`-patched(\d+)$`)
+	matches := re.FindStringSubmatch(version)
+	if len(matches) > 1 {
+		number, err := strconv.Atoi(matches[1])
+		if err == nil {
+			return number, true
+		}
+	}
+	return 0, false
 }
