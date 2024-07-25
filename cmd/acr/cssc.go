@@ -118,11 +118,23 @@ func newPatchFilterCmd(csscParams *csscParameters) *cobra.Command {
 				fmt.Println("Filter is empty or invalid.")
 				return nil
 			}
-			filteredResult, err := cssc.ApplyFilterAndGetFilteredList(ctx, acrClient, filter)
-			if err != nil {
-				return err
+
+			if filter.TaggingConvention == "semver" {
+				filteredResult, err := cssc.ApplyFilterAndGetFilteredListSemverPatchTags(ctx, acrClient, filter)
+				if err != nil {
+					return err
+				}
+				cssc.PrintFilteredResult(filteredResult, csscParams.showPatchTags, loginURL)
+			} else if filter.TaggingConvention == "floating" {
+				filteredResult, err := cssc.ApplyFilterAndGetFilteredList(ctx, acrClient, filter)
+				if err != nil {
+					return err
+				}
+				cssc.PrintFilteredResult(filteredResult, csscParams.showPatchTags, loginURL)
+
+			} else {
+				return errors.New("Invalid tagging convention. Supported tagging conventions are semver and floating")
 			}
-			cssc.PrintFilteredResult(filteredResult, csscParams.showPatchTags, loginURL)
 			return nil
 		},
 	}
