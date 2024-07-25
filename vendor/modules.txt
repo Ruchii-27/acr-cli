@@ -24,7 +24,7 @@ github.com/Azure/go-autorest/tracing
 # github.com/davecgh/go-spew v1.1.1
 ## explicit
 github.com/davecgh/go-spew/spew
-# github.com/dlclark/regexp2 v1.11.0
+# github.com/dlclark/regexp2 v1.11.2
 ## explicit; go 1.13
 github.com/dlclark/regexp2
 github.com/dlclark/regexp2/syntax
@@ -74,7 +74,7 @@ github.com/pmezard/go-difflib/difflib
 # github.com/sirupsen/logrus v1.9.3
 ## explicit; go 1.13
 github.com/sirupsen/logrus
-# github.com/spf13/cobra v1.8.0
+# github.com/spf13/cobra v1.8.1
 ## explicit; go 1.15
 github.com/spf13/cobra
 # github.com/spf13/pflag v1.0.5
@@ -111,18 +111,21 @@ gopkg.in/yaml.v3
 ## explicit; go 1.21
 oras.land/oras-go/v2
 oras.land/oras-go/v2/content
+oras.land/oras-go/v2/content/file
 oras.land/oras-go/v2/errdef
 oras.land/oras-go/v2/internal/cas
 oras.land/oras-go/v2/internal/container/set
 oras.land/oras-go/v2/internal/copyutil
 oras.land/oras-go/v2/internal/descriptor
 oras.land/oras-go/v2/internal/docker
+oras.land/oras-go/v2/internal/graph
 oras.land/oras-go/v2/internal/httputil
 oras.land/oras-go/v2/internal/interfaces
 oras.land/oras-go/v2/internal/ioutil
 oras.land/oras-go/v2/internal/manifestutil
 oras.land/oras-go/v2/internal/platform
 oras.land/oras-go/v2/internal/registryutil
+oras.land/oras-go/v2/internal/resolver
 oras.land/oras-go/v2/internal/spec
 oras.land/oras-go/v2/internal/status
 oras.land/oras-go/v2/internal/syncutil

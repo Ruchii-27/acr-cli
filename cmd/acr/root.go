@@ -19,6 +19,10 @@ type rootParameters struct {
 }
 
 func newRootCmd(args []string) *cobra.Command {
+	// for _, arg := range args {
+	// 	fmt.Printf("arg = %s\n", arg)
+	// }
+
 	var rootParams rootParameters
 
 	cmd := &cobra.Command{
@@ -39,8 +43,15 @@ To start working with the CLI, run acr --help`,
 		newLogoutCmd(),
 		newTagCmd(&rootParams),
 		newManifestCmd(&rootParams),
-		newCsscCmd(&rootParams),
 	)
+	// If environment variable ACR_EXPERIMENTAL_CSSC is set to true, add the cssc command to the command list
+	if isExperimentalCssc, exists := os.LookupEnv("ACR_EXPERIMENTAL_CSSC"); exists && isExperimentalCssc == "true" {
+		cmd.AddCommand(newCsscCmd(&rootParams))
+	}
+	// If environment variable ACR_EXPERIMENTAL_ANNOTATE is set to true, add the annotate command to the command list
+	if isExperimentalAnnotate, exists := os.LookupEnv("ACR_EXPERIMENTAL_ANNOTATE"); exists && isExperimentalAnnotate == "true" {
+		cmd.AddCommand(newAnnotateCmd(&rootParams))
+	}
 	cmd.PersistentFlags().StringVarP(&rootParams.registryName, "registry", "r", "", "Registry name")
 	cmd.PersistentFlags().StringVarP(&rootParams.username, "username", "u", "", "Registry username")
 	cmd.PersistentFlags().StringVarP(&rootParams.password, "password", "p", "", "Registry password")
